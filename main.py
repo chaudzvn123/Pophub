@@ -7,7 +7,7 @@ import os
 # ================== CẤU HÌNH ==================
 TOKEN = "NHẬP_TOKEN_BOT_VÀO_ĐÂY"
 PREFIX = ","
-ADMIN_UID = [123456789012345678]  # Thay UID admin Discord
+ADMIN_UID = [1401399647569838202]  # Thay UID admin Discord
 
 DATA_FILE = "users.json"
 
