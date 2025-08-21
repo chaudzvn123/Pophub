@@ -196,11 +196,28 @@ async def on_command_error(ctx, error):
 # ================== RUN BOT ==================
 try:
     token = os.getenv("TOKEN") or ""
-    if token == "":
-        raise Exception("🚨 Thiếu token! Hãy thêm TOKEN vào Secrets/biến môi trường.")
+    if not token:
+        raise RuntimeError("🚨 Thiếu token! Hãy thêm TOKEN vào Secrets/biến môi trường.")
+    # In ra một chút info để tự kiểm tra (không lộ token)
+    print(f"Starting bot... token_prefix={token[:8]}*** len={len(token)}")
     bot.run(token)
+
+except discord.errors.LoginFailure:
+    print("❌ Token không hợp lệ hoặc không phải **Bot Token**.")
+    print("👉 Vào Developer Portal → Bot → Reset Token → Copy lại BOT TOKEN và đặt vào biến môi trường TOKEN.")
+
+except discord.errors.PrivilegedIntentsRequired as e:
+    print("❌ Chưa bật **Privileged Gateway Intents** cho bot.")
+    print("👉 Vào Developer Portal → Bot → Bật 'MESSAGE CONTENT INTENT' (và nên bật cả 'SERVER MEMBERS INTENT').")
+    print(f"Chi tiết: {e}")
+
 except discord.HTTPException as e:
     if e.status == 429:
-        print("🚫 Discord chặn kết nối do spam request (Too Many Requests)")
+        print("🚫 Discord chặn kết nối do quá nhiều request (HTTP 429). Thử chạy lại sau.")
     else:
-        raise e
+        print(f"HTTPException: Status={e.status} Text={e.text}")
+        raise
+
+except Exception as e:
+    print(f"⚠️ Lỗi không xác định: {type(e).__name__}: {e}")
+    raise
