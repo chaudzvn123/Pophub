@@ -1,5 +1,15 @@
-import discord
-from discord.ext import commands
+# ================== CÀI THƯ VIỆN (chỉ cần chạy 1 lần) ==================
+# Nếu chạy trong CodePad thì cần dòng này để cài discord.py
+# Nếu bạn đã cài rồi thì có thể bỏ qua
+try:
+    import discord
+    from discord.ext import commands
+except ImportError:
+    import os
+    os.system("pip install discord.py")
+    import discord
+    from discord.ext import commands
+
 import json
 import random
 import os
@@ -7,7 +17,7 @@ import os
 # ================== CẤU HÌNH ==================
 TOKEN = "NHẬP_TOKEN_BOT_VÀO_ĐÂY"
 PREFIX = ","
-ADMIN_UID = [1401399647569838202]  # Thay UID admin Discord
+ADMIN_UID = [1265245644558176278]  # Thay UID admin Discord
 
 DATA_FILE = "users.json"
 
