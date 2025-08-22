@@ -6,14 +6,17 @@ import json
 import os
 
 # ================== CẤU HÌNH ==================
-TOKEN = "YOUR_DISCORD_TOKEN"   # Thay token bot của bạn
+TOKEN = "YOUR_TOKEN"   # Thay token bot của bạn
 PREFIX = ","
-ADMIN_UID = [123456789012345678]  # Thay bằng Discord ID admin
-
+ADMIN_UID = [1265245644558176278]  # Thay bằng Discord ID admin
 DATA_FILE = "users.json"
 
 ROUND_TIME = 40   # 40s 1 vòng
 LOCK_TIME = 35    # Sau 35s thì cấm cược
+
+# Link ảnh Google Drive (chỉ cần đổi ID)
+GIF_WIN = "https://drive.google.com/uc?export=view&id=1ABCDefGhIJklMNopQRstuVWxyz12345"
+GIF_LOSE = "https://drive.google.com/uc?export=view&id=1ZYXwvutsRQponMLkjihGFedcba54321"
 
 # ================== BOT ==================
 intents = discord.Intents.default()
@@ -51,8 +54,15 @@ bet_open = True
 history = []  # lưu kết quả tài/xỉu 10 vòng gần nhất
 win_streak = {}
 force_lose_rounds = {}
+game_channel = None  # Kênh chơi (set bằng lệnh ,setchannel)
 
 # ================== LỆNH ==================
+@bot.command(name="setchannel")
+async def setchannel(ctx):
+    global game_channel
+    game_channel = ctx.channel
+    await ctx.send(f"✅ Đã đặt kênh chơi TÀI XỈU là: {ctx.channel.mention}")
+
 @bot.command(name="datcuoc", aliases=["bet"])
 async def dat_cuoc(ctx, choice: str, amount: int):
     global bet_open, current_bets
@@ -84,7 +94,6 @@ async def dat_cuoc(ctx, choice: str, amount: int):
 async def addcash(ctx, member: discord.Member, amount: int):
     if ctx.author.id not in ADMIN_UID:
         return await ctx.send("❌ Bạn không có quyền!")
-
     add_balance(member.id, amount)
     await ctx.send(f"✅ Đã cộng **{amount:,} xu** cho {member.mention}")
 
@@ -92,10 +101,8 @@ async def addcash(ctx, member: discord.Member, amount: int):
 async def give(ctx, member: discord.Member, amount: int):
     if amount <= 0:
         return await ctx.send("❌ Số tiền phải lớn hơn 0!")
-
     if get_balance(ctx.author.id) < amount:
         return await ctx.send("❌ Bạn không đủ tiền!")
-
     add_balance(ctx.author.id, -amount)
     add_balance(member.id, amount)
     await ctx.send(f"✅ {ctx.author.mention} đã chuyển **{amount:,} xu** cho {member.mention}")
@@ -104,10 +111,20 @@ async def give(ctx, member: discord.Member, amount: int):
 async def cachchoi(ctx):
     text = """
 🎲 **CÁCH CHƠI TÀI XỈU**
-- Dùng lệnh: `,datcuoc <tài/xỉu> <số xu>`
+- Lệnh chính:
+  • `,setchannel` → Đặt kênh chơi
+  • `,open` → Admin mở game
+  • `,stop` → Admin dừng game
+  • `,datcuoc <tài/xỉu> <xu>` → Đặt cược
+  • `,give <@người chơi> <xu>` → Chuyển tiền
+  • `,addcash <@người chơi> <xu>` → Admin cho tiền
+  • `,soicau` → Admin soi cầu
+  • `,cachchoi` → Xem hướng dẫn
+
 - 1 ván kéo dài **40 giây**:
   • 35 giây đầu: mở cược
   • 5 giây cuối: khoá cược & lắc xúc xắc
+
 - Thắng: nhận lại **gấp đôi số xu cược**
 - Thua: mất số xu đã cược
 """
@@ -116,22 +133,18 @@ async def cachchoi(ctx):
 @bot.command(name="soicau")
 async def soicau(ctx):
     if ctx.author.id not in ADMIN_UID:
-        return await ctx.send("❌ Bạn không có quyền sử dụng lệnh này!")
-
+        return await ctx.send("❌ Bạn không có quyền!")
     if len(history) < 3:
         return await ctx.send("📊 Chưa có đủ dữ liệu để soi cầu (cần ít nhất 3 kết quả).")
-
     text = " → ".join([h.upper() for h in history])
-
     last3 = history[-3:]
     prediction = None
     if last3[0] == last3[1] == last3[2]:
-        prediction = "XỈU" if last3[-1] == "tài" else "TÀI"
+        prediction = "XỈU" if last3[-1] == "TÀI" else "TÀI"
     elif last3[0] != last3[1] and last3[1] != last3[2]:
         prediction = last3[0].upper()
     else:
         prediction = random.choice(["TÀI", "XỈU"])
-
     embed = discord.Embed(
         title="🔮 SOI CẦU TÀI XỈU",
         description=f"10 kết quả gần nhất:\n{text}\n\n👉 Dự đoán lần tiếp theo: **{prediction}**",
@@ -144,21 +157,18 @@ async def soicau(ctx):
 async def tai_xiu_auto():
     global current_bets, bet_open, history
 
-    channel = discord.utils.get(bot.get_all_channels(), name="general")  # đổi tên kênh nếu cần
-    if not channel:
+    if not game_channel:
         return
 
     # Bắt đầu vòng mới
     current_bets = {}
     bet_open = True
-    await channel.send("🎲 Vòng **TÀI XỈU** mới bắt đầu! Bạn có 35s để đặt cược.\nDùng lệnh: `,datcuoc <tài/xỉu> <số xu>`")
+    await game_channel.send("🎲 Vòng **TÀI XỈU** mới bắt đầu! Bạn có 35s để đặt cược.\nDùng lệnh: `,datcuoc <tài/xỉu> <số xu>`")
 
-    # Đợi 35s → khoá cược
     await asyncio.sleep(LOCK_TIME)
     bet_open = False
-    await channel.send("⏳ Đã hết thời gian cược! Còn 5s nữa sẽ lắc xúc xắc...")
+    await game_channel.send("⏳ Đã hết thời gian cược! Còn 5s nữa sẽ lắc xúc xắc...")
 
-    # Đợi 5s → lắc xúc xắc
     await asyncio.sleep(ROUND_TIME - LOCK_TIME)
     dice = [random.randint(1, 6) for _ in range(3)]
     total = sum(dice)
@@ -169,7 +179,6 @@ async def tai_xiu_auto():
 
     winners, losers = [], []
     for uid, bet in current_bets.items():
-        # Nếu người chơi bị ép thua
         if force_lose_rounds.get(uid, 0) > 0:
             force_lose_rounds[uid] -= 1
             losers.append((uid, bet["amount"]))
@@ -180,7 +189,6 @@ async def tai_xiu_auto():
             add_balance(uid, bet["amount"] * 2)
             winners.append((uid, bet["amount"]))
             win_streak[uid] = win_streak.get(uid, 0) + 1
-
             if win_streak[uid] >= 4:
                 force_lose_rounds[uid] = 2
                 win_streak[uid] = 0
@@ -203,14 +211,35 @@ async def tai_xiu_auto():
         text = "\n".join([f"<@{uid}> thua {amt:,} xu" for uid, amt in losers])
         embed.add_field(name="💀 Người thua", value=text, inline=False)
 
-    await channel.send(embed=embed)
+    await game_channel.send(embed=embed)
+
+    # 🎉 Hiệu ứng GIF ăn mừng/thua
+    if winners:
+        await game_channel.send("🎉 ĂN MỪNG!!! 🎉\n" + GIF_WIN)
+    elif losers:
+        await game_channel.send("😢 Thua rồi...\n" + GIF_LOSE)
+
+# ================== LỆNH QUẢN LÝ ==================
+@bot.command(name="open")
+async def open_game(ctx):
+    if ctx.author.id not in ADMIN_UID:
+        return await ctx.send("❌ Bạn không có quyền!")
+    if not tai_xiu_auto.is_running():
+        tai_xiu_auto.start()
+        await ctx.send("✅ Đã bắt đầu game TÀI XỈU tự động!")
+
+@bot.command(name="stop")
+async def stop_game(ctx):
+    if ctx.author.id not in ADMIN_UID:
+        return await ctx.send("❌ Bạn không có quyền!")
+    if tai_xiu_auto.is_running():
+        tai_xiu_auto.stop()
+        await ctx.send("🛑 Đã dừng game TÀI XỈU!")
 
 # ================== SỰ KIỆN ==================
 @bot.event
 async def on_ready():
     print(f"✅ Bot đã đăng nhập: {bot.user}")
-    if not tai_xiu_auto.is_running():
-        tai_xiu_auto.start()
 
 # ================== CHẠY BOT ==================
 bot.run(TOKEN)
