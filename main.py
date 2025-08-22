@@ -6,9 +6,9 @@ import os
 import time
 
 # ================== CẤU HÌNH ==================
-TOKEN = "YOUR_TOKEN"   # ⚠️ Thay bằng token thật
+TOKEN = "YOUR_TOKEN"   # ⚠️ Thay token thật
 PREFIX = ","
-ADMIN_UID = [1265245644558176278]   # ID admin (int)
+ADMIN_UID = [1265245644558176278]   # ID admin
 DATA_FILE = "users.json"
 
 GIF_GOAL = "https://drive.google.com/uc?export=view&id=1ABCDefGhIJklMNopQRstuVWxyz12345"
@@ -33,7 +33,7 @@ def save_data(data):
 def init_user(uid):
     uid_str = str(uid)
     data = load_data()
-    if uid_str not in data:
+    if uid_str not in data or not isinstance(data[uid_str], dict):
         data[uid_str] = {
             "balance": 0,
             "wins": 0,
@@ -42,23 +42,20 @@ def init_user(uid):
             "last_daily": 0
         }
         save_data(data)
-        print(f"[INIT] Tạo user mới {uid_str}")
-    return data[uid_str]
+        print(f"[INIT] Khởi tạo user {uid_str}")
+    return data
 
 def get_balance(uid):
-    data = load_data()
-    init_user(uid)
+    data = init_user(uid)
     return int(data[str(uid)]["balance"])
 
 def set_balance(uid, amount):
-    data = load_data()
-    init_user(uid)
+    data = init_user(uid)
     data[str(uid)]["balance"] = max(0, int(amount))
     save_data(data)
 
 def add_balance(uid, amount):
-    data = load_data()
-    init_user(uid)
+    data = init_user(uid)
     uid_str = str(uid)
     data[uid_str]["balance"] = max(0, int(data[uid_str]["balance"]) + int(amount))
     save_data(data)
@@ -66,15 +63,13 @@ def add_balance(uid, amount):
 # ================== BOT ==================
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 # --------- DAILY ---------
 @bot.command(name="daily")
 async def daily(ctx):
     uid = str(ctx.author.id)
-    data = load_data()
-    init_user(uid)
+    data = init_user(uid)
     print(f"[DAILY] {ctx.author} ({uid}) gọi lệnh")
 
     now = int(time.time())
@@ -89,6 +84,7 @@ async def daily(ctx):
 
     reward = 1000
     add_balance(uid, reward)
+    data = init_user(uid)
     data[uid]["last_daily"] = now
     save_data(data)
     print(f"[DAILY] {ctx.author} nhận {reward} xu")
@@ -150,26 +146,24 @@ async def bantien(ctx, member: discord.Member, amount: int):
 async def luonthang(ctx, member: discord.Member, mode: str):
     if ctx.author.id not in ADMIN_UID:
         return await ctx.send("❌ Bạn không có quyền!")
-    data = load_data()
-    uid = str(member.id)
-    init_user(uid)
+    data = init_user(member.id)
 
     m = mode.lower()
     if m == "on":
-        data[uid]["always_win"] = True
+        data[str(member.id)]["always_win"] = True
     elif m == "off":
-        data[uid]["always_win"] = False
+        data[str(member.id)]["always_win"] = False
     else:
         return await ctx.send("❌ Sai cú pháp! Dùng: `,luonthang @user on/off`")
     save_data(data)
-    print(f"[ADMIN:luonthang] {ctx.author} set {member} always_win={data[uid]['always_win']}")
+    print(f"[ADMIN:luonthang] {ctx.author} set {member} always_win={data[str(member.id)]['always_win']}")
     await ctx.send(f"⚡ {member.mention} đã {'bật' if m=='on' else 'tắt'} chế độ **luôn thắng**")
 
 # --------- GAME SÚT ---------
 @bot.command(name="sut")
 async def sut(ctx, huong: str, tien: str):
     uid = str(ctx.author.id)
-    user = init_user(uid)
+    data = init_user(uid)
     print(f"[SUT] {ctx.author} chọn {huong} với {tien}")
 
     # Xử lý số tiền
@@ -191,7 +185,7 @@ async def sut(ctx, huong: str, tien: str):
         return await ctx.send("⚠️ Bạn phải chọn `trái` hoặc `phải`!")
 
     # Kết quả
-    if user.get("always_win", False):
+    if data[uid].get("always_win", False):
         goal = choice
     else:
         goal = random.choice(["trái", "phải"])
