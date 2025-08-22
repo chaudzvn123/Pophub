@@ -6,9 +6,9 @@ import os
 import time
 
 # ================== CẤU HÌNH ==================
-TOKEN = "YOUR_TOKEN"   # Thay bằng token bot của bạn (đừng public token thật)
+TOKEN = "YOUR_TOKEN"   # ⚠️ Thay bằng token thật
 PREFIX = ","
-ADMIN_UID = [1265245644558176278]   # Thay ID admin của bạn (kiểu int)
+ADMIN_UID = [1265245644558176278]   # ID admin (int)
 DATA_FILE = "users.json"
 
 GIF_GOAL = "https://drive.google.com/uc?export=view&id=1ABCDefGhIJklMNopQRstuVWxyz12345"
@@ -23,7 +23,7 @@ def load_data():
         try:
             return json.load(f)
         except json.JSONDecodeError:
-            # nếu file hỏng thì reset
+            print("[ERROR] JSON hỏng → reset lại")
             return {}
 
 def save_data(data):
@@ -31,7 +31,6 @@ def save_data(data):
         json.dump(data, f, indent=4, ensure_ascii=False)
 
 def init_user(uid):
-    """Đảm bảo user tồn tại trong DB và trả về dict user."""
     uid_str = str(uid)
     data = load_data()
     if uid_str not in data:
@@ -43,7 +42,7 @@ def init_user(uid):
             "last_daily": 0
         }
         save_data(data)
-        print(f"[INIT] Khởi tạo user {uid_str}")
+        print(f"[INIT] Tạo user mới {uid_str}")
     return data[uid_str]
 
 def get_balance(uid):
@@ -66,7 +65,8 @@ def add_balance(uid, amount):
 
 # ================== BOT ==================
 intents = discord.Intents.default()
-intents.message_content = True  # nhớ bật quyền Message Content trong Developer Portal
+intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 # --------- DAILY ---------
@@ -75,21 +75,23 @@ async def daily(ctx):
     uid = str(ctx.author.id)
     data = load_data()
     init_user(uid)
+    print(f"[DAILY] {ctx.author} ({uid}) gọi lệnh")
 
     now = int(time.time())
     last_daily = int(data[uid].get("last_daily", 0))
 
-    if now - last_daily < 86400:  # 24h = 86400s
+    if now - last_daily < 86400:
         remain = 86400 - (now - last_daily)
         hours = remain // 3600
         minutes = (remain % 3600) // 60
+        print(f"[DAILY] chưa đủ thời gian, còn {hours}h{minutes}m")
         return await ctx.send(f"⏳ Bạn phải chờ {hours}h {minutes}m nữa để nhận quà daily!")
 
     reward = 1000
     add_balance(uid, reward)
     data[uid]["last_daily"] = now
     save_data(data)
-
+    print(f"[DAILY] {ctx.author} nhận {reward} xu")
     await ctx.send(f"🎁 {ctx.author.mention} đã nhận **{reward} xu**! Số dư: **{get_balance(uid):,}**")
 
 # --------- BAL ---------
@@ -97,6 +99,7 @@ async def daily(ctx):
 async def bal(ctx):
     uid = str(ctx.author.id)
     balance = get_balance(uid)
+    print(f"[BAL] {ctx.author} có {balance} xu")
     await ctx.send(f"💰 Số dư của bạn: **{balance:,} xu**")
 
 # --------- GIVE ---------
@@ -104,6 +107,7 @@ async def bal(ctx):
 async def give(ctx, member: discord.Member, amount: int):
     sender = str(ctx.author.id)
     receiver = str(member.id)
+    print(f"[GIVE] {ctx.author} → {member}, số tiền: {amount}")
 
     if amount <= 0:
         return await ctx.send("❌ Số tiền không hợp lệ!")
@@ -112,6 +116,7 @@ async def give(ctx, member: discord.Member, amount: int):
 
     add_balance(sender, -amount)
     add_balance(receiver, amount)
+    print(f"[GIVE] Thành công: {ctx.author} -{amount} → {member} +{amount}")
     await ctx.send(f"✅ {ctx.author.mention} đã chuyển **{amount:,} xu** cho {member.mention}")
 
 # --------- ADMIN ---------
@@ -119,8 +124,7 @@ async def give(ctx, member: discord.Member, amount: int):
 async def addcash(ctx, member: discord.Member, amount: int):
     if ctx.author.id not in ADMIN_UID:
         return await ctx.send("❌ Bạn không có quyền!")
-    if amount == 0:
-        return await ctx.send("⚠️ Số tiền phải khác 0.")
+    print(f"[ADMIN:addcash] {ctx.author} +{amount} cho {member}")
     add_balance(member.id, amount)
     await ctx.send(f"✅ Đã cộng **{amount:,} xu** cho {member.mention}")
 
@@ -128,6 +132,7 @@ async def addcash(ctx, member: discord.Member, amount: int):
 async def settien(ctx, member: discord.Member, amount: int):
     if ctx.author.id not in ADMIN_UID:
         return await ctx.send("❌ Bạn không có quyền!")
+    print(f"[ADMIN:settien] {ctx.author} đặt {member} = {amount}")
     set_balance(member.id, amount)
     await ctx.send(f"✅ Đã đặt số dư của {member.mention} = **{amount:,} xu**")
 
@@ -137,6 +142,7 @@ async def bantien(ctx, member: discord.Member, amount: int):
         return await ctx.send("❌ Bạn không có quyền!")
     if amount <= 0:
         return await ctx.send("⚠️ Số tiền phải > 0.")
+    print(f"[ADMIN:bantien] {ctx.author} -{amount} của {member}")
     add_balance(member.id, -amount)
     await ctx.send(f"✅ Đã trừ **{amount:,} xu** của {member.mention}")
 
@@ -156,6 +162,7 @@ async def luonthang(ctx, member: discord.Member, mode: str):
     else:
         return await ctx.send("❌ Sai cú pháp! Dùng: `,luonthang @user on/off`")
     save_data(data)
+    print(f"[ADMIN:luonthang] {ctx.author} set {member} always_win={data[uid]['always_win']}")
     await ctx.send(f"⚡ {member.mention} đã {'bật' if m=='on' else 'tắt'} chế độ **luôn thắng**")
 
 # --------- GAME SÚT ---------
@@ -163,6 +170,7 @@ async def luonthang(ctx, member: discord.Member, mode: str):
 async def sut(ctx, huong: str, tien: str):
     uid = str(ctx.author.id)
     user = init_user(uid)
+    print(f"[SUT] {ctx.author} chọn {huong} với {tien}")
 
     # Xử lý số tiền
     if tien.lower() == "all":
@@ -171,7 +179,7 @@ async def sut(ctx, huong: str, tien: str):
         try:
             bet = int(tien)
         except ValueError:
-            return await ctx.send("❌ Số tiền không hợp lệ! Ví dụ: `,sut trái 500` hoặc `,sut phải all`")
+            return await ctx.send("❌ Số tiền không hợp lệ! VD: `,sut trái 500`")
 
     if bet <= 0:
         return await ctx.send("❌ Số tiền phải > 0!")
@@ -182,25 +190,24 @@ async def sut(ctx, huong: str, tien: str):
     if choice not in ["trái", "phải"]:
         return await ctx.send("⚠️ Bạn phải chọn `trái` hoặc `phải`!")
 
-    # Kết quả (giữ luật 'always_win')
+    # Kết quả
     if user.get("always_win", False):
         goal = choice
     else:
         goal = random.choice(["trái", "phải"])
 
     if choice == goal:
-        # thắng: nhận bằng số cược (vì chưa trừ trước đó)
         add_balance(uid, bet)
         result = f"🎉 {ctx.author.mention} SÚT VÀO!!! Bạn thắng **{bet:,} xu**"
         gif = GIF_GOAL
         color = 0x00ff00
     else:
-        # thua: trừ số cược
         add_balance(uid, -bet)
         result = f"💔 {ctx.author.mention} sút trượt! Bạn thua **{bet:,} xu**"
         gif = GIF_SAVE
         color = 0xff0000
 
+    print(f"[SUT] {ctx.author} chọn {choice}, goal={goal}, kết quả: {result}")
     embed = discord.Embed(title="⚽ KẾT QUẢ SÚT", description=result, color=color)
     embed.set_image(url=gif)
     await ctx.send(embed=embed)
@@ -228,7 +235,7 @@ async def cachchoi(ctx):
     embed.set_footer(text="Chúc bạn chơi vui vẻ ⚽")
     await ctx.send(embed=embed)
 
-# --------- BẮT LỖI CHUNG (gõ sai cú pháp, thiếu tham số, lệnh không tồn tại) ---------
+# --------- BẮT LỖI ---------
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
@@ -237,7 +244,6 @@ async def on_command_error(ctx, error):
         return await ctx.send("⚠️ Sai kiểu tham số! Dùng `,cachchoi` để xem hướng dẫn.")
     if isinstance(error, commands.CommandNotFound):
         return await ctx.send("❓ Lệnh không tồn tại. Thử `,cachchoi` nhé.")
-    # Log ra console cho dev
     print("[ERROR]", repr(error))
 
 # ================== RUN ==================
