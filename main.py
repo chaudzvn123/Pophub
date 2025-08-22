@@ -1,223 +1,216 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
+import asyncio
+import random
 import json
 import os
-import random
 
 # ================== CẤU HÌNH ==================
+TOKEN = "YOUR_DISCORD_TOKEN"   # Thay token bot của bạn
 PREFIX = ","
-ADMIN_UID = [1265245644558176278]  # Thay ID này bằng Discord ID của bạn
+ADMIN_UID = [123456789012345678]  # Thay bằng Discord ID admin
+
 DATA_FILE = "users.json"
 
-# ================== LOAD & SAVE DATA ==================
+ROUND_TIME = 40   # 40s 1 vòng
+LOCK_TIME = 35    # Sau 35s thì cấm cược
+
+# ================== BOT ==================
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+
+# ================== DỮ LIỆU NGƯỜI DÙNG ==================
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {}
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
-users = load_data()
+def get_balance(uid):
+    data = load_data()
+    return data.get(str(uid), 0)
 
-def get_balance(uid): 
-    return users.get(str(uid), 0)
+def add_balance(uid, amount):
+    data = load_data()
+    uid = str(uid)
+    if uid not in data:
+        data[uid] = 0
+    data[uid] += amount
+    if data[uid] < 0:
+        data[uid] = 0
+    save_data(data)
 
-def set_balance(uid, amount): 
-    users[str(uid)] = max(0, amount)
-    save_data(users)
+# ================== GAME STATE ==================
+current_bets = {}
+bet_open = True
+history = []  # lưu kết quả tài/xỉu 10 vòng gần nhất
+win_streak = {}
+force_lose_rounds = {}
 
-def add_balance(uid, amount): 
-    users[str(uid)] = max(0, get_balance(uid) + amount)
-    save_data(users)
+# ================== LỆNH ==================
+@bot.command(name="datcuoc", aliases=["bet"])
+async def dat_cuoc(ctx, choice: str, amount: int):
+    global bet_open, current_bets
 
-# ================== BOT SETUP ==================
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)  # ⚡ FIX help
-
-@bot.event
-async def on_ready():
-    print(f"✅ Bot đã đăng nhập: {bot.user}")
-    print(f"📊 Prefix: {PREFIX}")
-    print(f"🎮 Bot sẵn sàng chơi tài xỉu!")
-
-# ================== COMMANDS ==================
-
-@bot.command(name="sotiendangco", aliases=["balance", "bal"])
-async def check_balance(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    balance = get_balance(target.id)
-    
-    embed = discord.Embed(
-        title="💰 Số Dư Hiện Tại",
-        description=f"{target.mention} đang có **{balance:,} xu**",
-        color=0x00ff00
-    )
-    embed.set_thumbnail(url=target.avatar.url if target.avatar else None)
-    await ctx.send(embed=embed)
-
-@bot.command(name="addtien", aliases=["add"])
-async def add_money(ctx, member: discord.Member, amount: int):
-    if ctx.author.id not in ADMIN_UID:
-        return await ctx.send("❌ Bạn không có quyền sử dụng lệnh này!")
-    if amount <= 0:
-        return await ctx.send("❌ Số tiền phải lớn hơn 0!")
-    
-    add_balance(member.id, amount)
-    embed = discord.Embed(
-        title="✅ Thêm Tiền Thành Công",
-        description=f"Đã cộng **{amount:,} xu** cho {member.mention}",
-        color=0x00ff00
-    )
-    embed.add_field(name="Số dư mới", value=f"{get_balance(member.id):,} xu", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command(name="settien", aliases=["set"])
-async def set_money(ctx, member: discord.Member, amount: int):
-    if ctx.author.id not in ADMIN_UID:
-        return await ctx.send("❌ Bạn không có quyền sử dụng lệnh này!")
-    if amount < 0:
-        return await ctx.send("❌ Số tiền không thể âm!")
-    
-    set_balance(member.id, amount)
-    embed = discord.Embed(
-        title="✅ Đặt Lại Số Dư",
-        description=f"Đã đặt số dư của {member.mention} thành **{amount:,} xu**",
-        color=0x00ff00
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name="taixiu", aliases=["tx"])
-async def tai_xiu_game(ctx, choice: str, amount: int):
     valid_choices = ["tài", "tai", "xỉu", "xiu"]
+    if not bet_open:
+        return await ctx.send("❌ Hiện đã khóa cược, vui lòng chờ vòng sau!")
+
     if choice.lower() not in valid_choices:
         return await ctx.send("❌ Chỉ được chọn **tài** hoặc **xỉu**!")
     if amount <= 0:
         return await ctx.send("❌ Số tiền cược phải lớn hơn 0!")
-    
-    current_balance = get_balance(ctx.author.id)
-    if amount > current_balance:
-        return await ctx.send(f"❌ Không đủ tiền! Bạn chỉ có **{current_balance:,} xu**")
-    
+
+    balance = get_balance(ctx.author.id)
+    if balance < amount:
+        return await ctx.send(f"❌ Bạn không đủ tiền! Số dư: {balance:,} xu")
+
+    if ctx.author.id in current_bets:
+        return await ctx.send("❌ Bạn đã đặt cược rồi, không thể đặt thêm!")
+
+    # Trừ tiền tạm
+    add_balance(ctx.author.id, -amount)
+    user_choice = "tài" if choice.lower().startswith("t") else "xỉu"
+    current_bets[ctx.author.id] = {"choice": user_choice, "amount": amount}
+
+    await ctx.send(f"✅ {ctx.author.mention} đã đặt **{amount:,} xu** vào **{user_choice.upper()}**")
+
+@bot.command(name="addcash")
+async def addcash(ctx, member: discord.Member, amount: int):
+    if ctx.author.id not in ADMIN_UID:
+        return await ctx.send("❌ Bạn không có quyền!")
+
+    add_balance(member.id, amount)
+    await ctx.send(f"✅ Đã cộng **{amount:,} xu** cho {member.mention}")
+
+@bot.command(name="give")
+async def give(ctx, member: discord.Member, amount: int):
+    if amount <= 0:
+        return await ctx.send("❌ Số tiền phải lớn hơn 0!")
+
+    if get_balance(ctx.author.id) < amount:
+        return await ctx.send("❌ Bạn không đủ tiền!")
+
+    add_balance(ctx.author.id, -amount)
+    add_balance(member.id, amount)
+    await ctx.send(f"✅ {ctx.author.mention} đã chuyển **{amount:,} xu** cho {member.mention}")
+
+@bot.command(name="cachchoi")
+async def cachchoi(ctx):
+    text = """
+🎲 **CÁCH CHƠI TÀI XỈU**
+- Dùng lệnh: `,datcuoc <tài/xỉu> <số xu>`
+- 1 ván kéo dài **40 giây**:
+  • 35 giây đầu: mở cược
+  • 5 giây cuối: khoá cược & lắc xúc xắc
+- Thắng: nhận lại **gấp đôi số xu cược**
+- Thua: mất số xu đã cược
+"""
+    await ctx.send(text)
+
+@bot.command(name="soicau")
+async def soicau(ctx):
+    if ctx.author.id not in ADMIN_UID:
+        return await ctx.send("❌ Bạn không có quyền sử dụng lệnh này!")
+
+    if len(history) < 3:
+        return await ctx.send("📊 Chưa có đủ dữ liệu để soi cầu (cần ít nhất 3 kết quả).")
+
+    text = " → ".join([h.upper() for h in history])
+
+    last3 = history[-3:]
+    prediction = None
+    if last3[0] == last3[1] == last3[2]:
+        prediction = "XỈU" if last3[-1] == "tài" else "TÀI"
+    elif last3[0] != last3[1] and last3[1] != last3[2]:
+        prediction = last3[0].upper()
+    else:
+        prediction = random.choice(["TÀI", "XỈU"])
+
+    embed = discord.Embed(
+        title="🔮 SOI CẦU TÀI XỈU",
+        description=f"10 kết quả gần nhất:\n{text}\n\n👉 Dự đoán lần tiếp theo: **{prediction}**",
+        color=0x00ffcc
+    )
+    await ctx.send(embed=embed)
+
+# ================== VÒNG TỰ ĐỘNG ==================
+@tasks.loop(seconds=ROUND_TIME)
+async def tai_xiu_auto():
+    global current_bets, bet_open, history
+
+    channel = discord.utils.get(bot.get_all_channels(), name="general")  # đổi tên kênh nếu cần
+    if not channel:
+        return
+
+    # Bắt đầu vòng mới
+    current_bets = {}
+    bet_open = True
+    await channel.send("🎲 Vòng **TÀI XỈU** mới bắt đầu! Bạn có 35s để đặt cược.\nDùng lệnh: `,datcuoc <tài/xỉu> <số xu>`")
+
+    # Đợi 35s → khoá cược
+    await asyncio.sleep(LOCK_TIME)
+    bet_open = False
+    await channel.send("⏳ Đã hết thời gian cược! Còn 5s nữa sẽ lắc xúc xắc...")
+
+    # Đợi 5s → lắc xúc xắc
+    await asyncio.sleep(ROUND_TIME - LOCK_TIME)
     dice = [random.randint(1, 6) for _ in range(3)]
     total = sum(dice)
     result = "tài" if total > 10 else "xỉu"
-    
-    user_choice = "tài" if choice.lower().startswith("t") else "xỉu"
-    is_win = user_choice == result
-    
-    if is_win:
-        add_balance(ctx.author.id, amount)
-        win_amount = amount
-    else:
-        add_balance(ctx.author.id, -amount)
-        win_amount = -amount
-    
-    new_balance = get_balance(ctx.author.id)
-    
+    history.append(result)
+    if len(history) > 10:
+        history.pop(0)
+
+    winners, losers = [], []
+    for uid, bet in current_bets.items():
+        # Nếu người chơi bị ép thua
+        if force_lose_rounds.get(uid, 0) > 0:
+            force_lose_rounds[uid] -= 1
+            losers.append((uid, bet["amount"]))
+            win_streak[uid] = 0
+            continue
+
+        if bet["choice"] == result:
+            add_balance(uid, bet["amount"] * 2)
+            winners.append((uid, bet["amount"]))
+            win_streak[uid] = win_streak.get(uid, 0) + 1
+
+            if win_streak[uid] >= 4:
+                force_lose_rounds[uid] = 2
+                win_streak[uid] = 0
+        else:
+            losers.append((uid, bet["amount"]))
+            win_streak[uid] = 0
+
     embed = discord.Embed(
         title="🎲 KẾT QUẢ TÀI XỈU",
-        color=0x00ff00 if is_win else 0xff0000
+        color=0x00ff00
     )
     embed.add_field(name="Xúc xắc", value=f"🎲 {dice[0]} - {dice[1]} - {dice[2]}", inline=True)
     embed.add_field(name="Tổng điểm", value=f"**{total}**", inline=True)
     embed.add_field(name="Kết quả", value=f"**{result.upper()}**", inline=True)
-    embed.add_field(name="Lựa chọn của bạn", value=f"**{user_choice.upper()}**", inline=True)
-    embed.add_field(name="Số tiền cược", value=f"{amount:,} xu", inline=True)
-    embed.add_field(name="Kết quả", value=f"{'✅ THẮNG' if is_win else '❌ THUA'}", inline=True)
-    embed.add_field(name="💰 Số dư mới", value=f"{new_balance:,} xu", inline=False)
-    embed.set_footer(text=f"Người chơi: {ctx.author.display_name}")
-    
-    await ctx.send(embed=embed)
 
-@bot.command(name="help", aliases=["h"])
-async def help_command(ctx):
-    embed = discord.Embed(
-        title="🎮 HƯỚNG DẪN SỬ DỤNG BOT TÀI XỈU",
-        description="Dưới đây là các lệnh có sẵn:",
-        color=0x0099ff
-    )
-    embed.add_field(name="🎲 Game Tài Xỉu",
-        value=f"`{PREFIX}taixiu <tài/xỉu> <số xu>`\nVí dụ: `{PREFIX}taixiu tài 1000`", inline=False)
-    embed.add_field(name="💰 Kiểm tra số dư",
-        value=f"`{PREFIX}sotiendangco [@người chơi]`\nVí dụ: `{PREFIX}sotiendangco` hoặc `{PREFIX}bal @user`", inline=False)
-    embed.add_field(name="🎯 Luật chơi Tài Xỉu",
-        value="• Tổng 3 xúc xắc từ 11-18: **TÀI**\n• Tổng 3 xúc xắc từ 3-10: **XỈU**\n• Thắng = tiền cược\n• Thua = mất tiền cược", inline=False)
-    if ctx.author.id in ADMIN_UID:
-        embed.add_field(name="⚙️ Lệnh Admin",
-            value=f"`{PREFIX}addtien <@user> <số xu>`\n`{PREFIX}settien <@user> <số xu>`", inline=False)
-    embed.set_footer(text="Chúc bạn may mắn! 🍀")
-    await ctx.send(embed=embed)
+    if winners:
+        text = "\n".join([f"<@{uid}> thắng {amt:,} xu" for uid, amt in winners])
+        embed.add_field(name="🏆 Người thắng", value=text, inline=False)
+    if losers:
+        text = "\n".join([f"<@{uid}> thua {amt:,} xu" for uid, amt in losers])
+        embed.add_field(name="💀 Người thua", value=text, inline=False)
 
-@bot.command(name="top", aliases=["leaderboard"])
-async def leaderboard(ctx):
-    if not users:
-        return await ctx.send("📊 Chưa có dữ liệu người chơi nào!")
-    
-    sorted_users = sorted(users.items(), key=lambda x: x[1], reverse=True)
-    top_10 = sorted_users[:10]
-    
-    embed = discord.Embed(
-        title="🏆 BẢNG XẾP HẠNG TOP 10",
-        description="Những người chơi giàu nhất server:",
-        color=0xffd700
-    )
-    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-    leaderboard_text = ""
-    for i, (user_id, balance) in enumerate(top_10):
-        try:
-            user = bot.get_user(int(user_id))
-            username = user.display_name if user else f"User {str(user_id)[:4]}..."
-            leaderboard_text += f"{medals[i]} **{username}**: {balance:,} xu\n"
-        except:
-            leaderboard_text += f"{medals[i]} **Unknown User**: {balance:,} xu\n"
-    embed.description = leaderboard_text
-    await ctx.send(embed=embed)
+    await channel.send(embed=embed)
 
-# ================== ERROR HANDLER ==================
+# ================== SỰ KIỆN ==================
 @bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Thiếu tham số! Sử dụng `{PREFIX}help` để xem hướng dẫn.")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Tham số không hợp lệ! Kiểm tra lại cú pháp.")
-    elif isinstance(error, commands.CommandNotFound):
-        await ctx.send(f"❌ Lệnh không tồn tại! Sử dụng `{PREFIX}help` để xem danh sách lệnh.")
-    else:
-        await ctx.send("⚠️ Đã xảy ra lỗi, vui lòng thử lại sau.")
-        raise error
+async def on_ready():
+    print(f"✅ Bot đã đăng nhập: {bot.user}")
+    if not tai_xiu_auto.is_running():
+        tai_xiu_auto.start()
 
-# ================== RUN BOT ==================
-try:
-    token = os.getenv("TOKEN") or ""
-    if not token:
-        raise RuntimeError("🚨 Thiếu token! Hãy thêm TOKEN vào Secrets/biến môi trường.")
-    # In ra một chút info để tự kiểm tra (không lộ token)
-    print(f"Starting bot... token_prefix={token[:8]}*** len={len(token)}")
-    bot.run(token)
-
-except discord.errors.LoginFailure:
-    print("❌ Token không hợp lệ hoặc không phải **Bot Token**.")
-    print("👉 Vào Developer Portal → Bot → Reset Token → Copy lại BOT TOKEN và đặt vào biến môi trường TOKEN.")
-
-except discord.errors.PrivilegedIntentsRequired as e:
-    print("❌ Chưa bật **Privileged Gateway Intents** cho bot.")
-    print("👉 Vào Developer Portal → Bot → Bật 'MESSAGE CONTENT INTENT' (và nên bật cả 'SERVER MEMBERS INTENT').")
-    print(f"Chi tiết: {e}")
-
-except discord.HTTPException as e:
-    if e.status == 429:
-        print("🚫 Discord chặn kết nối do quá nhiều request (HTTP 429). Thử chạy lại sau.")
-    else:
-        print(f"HTTPException: Status={e.status} Text={e.text}")
-        raise
-
-except Exception as e:
-    print(f"⚠️ Lỗi không xác định: {type(e).__name__}: {e}")
-    raise
+# ================== CHẠY BOT ==================
+bot.run(TOKEN)
