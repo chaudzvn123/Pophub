@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import random
 import json
 import os
@@ -8,12 +8,16 @@ import threading
 from flask import Flask, request
 
 # ================== CẤU HÌNH ==================
-TOKEN = "YOUR_TOKEN"   # ⚠️ Thay token thật
+TOKEN = "YOUR_DISCORD_BOT_TOKEN"   # ⚠️ Token bot Discord
 PREFIX = ","
-ADMIN_UID = [1265245644558176278]   # ID admin
+ADMIN_UID = [1265245644558176278]  # ID admin
 DATA_FILE = "users.json"
 DAILY_CHECK_FILE = "daily_passed.json"
 DAILY_LINK = "https://link4m.com/SOolau4E"   # Link kiếm tiền
+
+# 🔑 API Token sinh tự động
+API_TOKEN = "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=24))
+print(f"[API] API_TOKEN được tạo: {API_TOKEN}")
 
 # ================== HÀM LƯU / LOAD ==================
 def load_data():
@@ -65,12 +69,16 @@ def load_passed():
     with open(DAILY_CHECK_FILE, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
-        except:
+        except Exception as e:
+            print(f"[ERROR] Lỗi load_passed: {e}")
             return {"reset_time": int(time.time()), "users": {}}
 
 def save_passed(data):
-    with open(DAILY_CHECK_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    try:
+        with open(DAILY_CHECK_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"[ERROR] Lỗi save_passed: {e}")
 
 def has_passed(uid):
     data = load_passed()
@@ -80,6 +88,7 @@ def mark_passed(uid):
     data = load_passed()
     data["users"][str(uid)] = True
     save_passed(data)
+    print(f"[VERIFY] UID {uid} đã vượt link thành công!")
 
 def reset_all_passed():
     new_data = {"reset_time": int(time.time()), "users": {}}
@@ -102,56 +111,76 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 # --------- DAILY ---------
 @bot.command(name="daily")
 async def daily(ctx):
-    uid = str(ctx.author.id)
-    data = init_user(uid)
-    now = int(time.time())
-    last_daily = int(data[uid].get("last_daily", 0))
+    try:
+        uid = str(ctx.author.id)
+        data = init_user(uid)
+        now = int(time.time())
+        last_daily = int(data[uid].get("last_daily", 0))
 
-    # Kiểm tra nếu đến thời gian reset → reset luôn
-    check_need_reset()
+        # Kiểm tra reset 24h
+        check_need_reset()
 
-    # Cooldown 24h cho mỗi user
-    if now - last_daily < 86400:
-        remain = 86400 - (now - last_daily)
-        hours = remain // 3600
-        minutes = (remain % 3600) // 60
-        return await ctx.send(f"⏳ Bạn phải chờ {hours}h {minutes}m nữa!")
+        # Cooldown 24h cho mỗi user
+        if now - last_daily < 86400:
+            remain = 86400 - (now - last_daily)
+            hours = remain // 3600
+            minutes = (remain % 3600) // 60
+            return await ctx.send(f"⏳ Bạn phải chờ {hours}h {minutes}m nữa!")
 
-    # Nếu user chưa vượt link trong vòng reset mới
-    if not has_passed(uid):
-        return await ctx.send(
-            f"🔗 Hết thời gian! Vui lòng vượt lại link để nhận daily:\n{DAILY_LINK}?uid={uid}"
-        )
+        # Nếu chưa vượt link
+        if not has_passed(uid):
+            return await ctx.send(
+                f"🔗 Hết thời gian! Vui lòng vượt lại link để nhận daily:\n{DAILY_LINK}?uid={uid}&apitoken={API_TOKEN}"
+            )
 
-    # Nếu đã vượt → thưởng
-    reward = 1000
-    add_balance(uid, reward)
-    data[uid]["last_daily"] = now
-    save_data(data)
+        # Nếu đã vượt → thưởng
+        reward = 1000
+        add_balance(uid, reward)
+        data[uid]["last_daily"] = now
+        save_data(data)
 
-    await ctx.send(f"🎁 {ctx.author.mention} nhận **{reward} xu**! Số dư: **{get_balance(uid):,}**")
+        await ctx.send(f"🎁 {ctx.author.mention} nhận **{reward} xu**! Số dư: **{get_balance(uid):,}**")
+        print(f"[DAILY] {ctx.author} ({uid}) nhận {reward} xu")
+    except Exception as e:
+        print(f"[ERROR] Lỗi daily: {e}")
 
 # --------- BAL ---------
 @bot.command(name="bal", aliases=["balance"])
 async def bal(ctx):
-    uid = str(ctx.author.id)
-    balance = get_balance(uid)
-    await ctx.send(f"💰 Số dư của bạn: **{balance:,} xu**")
+    try:
+        uid = str(ctx.author.id)
+        balance = get_balance(uid)
+        await ctx.send(f"💰 Số dư của bạn: **{balance:,} xu**")
+    except Exception as e:
+        print(f"[ERROR] Lỗi bal: {e}")
 
 # ================== FLASK API ==================
 app = Flask(__name__)
 
 @app.route("/verify")
 def verify():
-    uid = request.args.get("uid")
-    if not uid:
-        return "❌ Thiếu tham số UID!"
-    mark_passed(uid)
-    return f"✅ UID {uid} đã xác nhận vượt link thành công! Hãy quay lại Discord và gõ ,daily để nhận thưởng."
+    try:
+        uid = request.args.get("uid")
+        token = request.args.get("apitoken")
+
+        if not uid:
+            return "❌ Thiếu tham số UID!"
+        if token != API_TOKEN:
+            print(f"[WARNING] UID {uid} gọi sai API Token: {token}")
+            return "❌ Sai API token!"
+
+        mark_passed(uid)
+        return f"✅ UID {uid} đã xác nhận vượt link thành công! Hãy quay lại Discord và gõ ,daily để nhận thưởng."
+    except Exception as e:
+        print(f"[ERROR] Lỗi /verify: {e}")
+        return f"❌ Lỗi server: {e}"
 
 # ================== RUN BOT + API SONG SONG ==================
 def run_flask():
-    app.run(host="0.0.0.0", port=5000)
+    try:
+        app.run(host="0.0.0.0", port=5000)
+    except Exception as e:
+        print(f"[ERROR] Flask crash: {e}")
 
 @bot.event
 async def on_ready():
@@ -159,4 +188,7 @@ async def on_ready():
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask).start()
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        print(f"[ERROR] Bot crash: {e}")
