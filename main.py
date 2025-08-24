@@ -5,7 +5,7 @@ import json
 import os
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request
 
 # ================== CẤU HÌNH ==================
@@ -13,26 +13,33 @@ TOKEN = "YOUR_DISCORD_BOT_TOKEN"   # ⚠️ Thay token bot Discord thật
 PREFIX = ","
 ADMIN_UID = [1265245644558176278]  # ID admin
 DATA_FILE = "users.json"
-DAILY_CHECK_FILE = "daily_passed.json"
-DAILY_LINK = "https://link4m.com/XilfNqMv"   # Link kiếm tiền
-API_TOKEN = "68a9db54407b5520a7207b29"       # API token tự đặt
+DAILY_CODE_FILE = "daily_code.json"
+DAILY_LINK = "https://link4m.com/ib9Fuh"   # Link kiếm tiền
+API_TOKEN = "68a9db54407b5520a7207b29"     # API token tự đặt
 
 print(f"[API] API_TOKEN đang sử dụng: {API_TOKEN}")
 
-# ================== HÀM LƯU / LOAD ==================
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({}, f)
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
+# ================== HÀM JSON ==================
+def load_file(file, default):
+    if not os.path.exists(file):
+        with open(file, "w", encoding="utf-8") as f:
+            json.dump(default, f)
+    with open(file, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+        except:
+            return default
+
+def save_file(file, data):
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+# ================== USER DATA ==================
+def load_data():
+    return load_file(DATA_FILE, {})
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+    save_file(DATA_FILE, data)
 
 def init_user(uid):
     data = load_data()
@@ -58,48 +65,56 @@ def add_balance(uid, amount):
         data[str(uid)]["balance"] = 0
     save_data(data)
 
-# ================== DAILY CHECK ==================
-def load_passed():
-    if not os.path.exists(DAILY_CHECK_FILE):
-        return {"reset_time": int(time.time()), "users": {}}
-    with open(DAILY_CHECK_FILE, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except:
-            return {"reset_time": int(time.time()), "users": {}}
+# ================== CODE DAILY (HWID) ==================
+def load_codes():
+    return load_file(DAILY_CODE_FILE, {"reset_time": int(time.time()), "codes": {}})
 
-def save_passed(data):
-    with open(DAILY_CHECK_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_codes(data):
+    save_file(DAILY_CODE_FILE, data)
 
-def has_passed(uid):
-    return str(uid) in load_passed().get("users", {})
+def reset_codes():
+    save_codes({"reset_time": int(time.time()), "codes": {}})
+    print("[SYSTEM] Reset code daily cho tất cả user")
 
-def mark_passed(uid):
-    data = load_passed()
-    data["users"][str(uid)] = True
-    save_passed(data)
-
-def reset_all_passed():
-    save_passed({"reset_time": int(time.time()), "users": {}})
-
-def check_need_reset():
-    data = load_passed()
+def check_reset_codes():
+    data = load_codes()
     now = int(time.time())
-    if now - data.get("reset_time", 0) >= 86400:
-        reset_all_passed()
+    if now - data["reset_time"] >= 86400:  # 24h
+        reset_codes()
+
+def generate_code(uid):
+    check_reset_codes()
+    data = load_codes()
+    uid = str(uid)
+    code = str(random.randint(100000, 999999))
+    data["codes"][uid] = {"code": code, "verified": False}
+    save_codes(data)
+    return code
+
+def verify_code(uid, code):
+    check_reset_codes()
+    data = load_codes()
+    uid = str(uid)
+    if uid in data["codes"] and data["codes"][uid]["code"] == code:
+        data["codes"][uid]["verified"] = True
+        save_codes(data)
+        return True
+    return False
+
+def has_verified(uid):
+    data = load_codes()
+    return data["codes"].get(str(uid), {}).get("verified", False)
 
 # ================== BOT ==================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-# Trạng thái game
 state = {
-    "win_streak": {},   # uid: số trận thắng liên tiếp
-    "forced_lose": {},  # uid: số trận bị ép thua
+    "win_streak": {},
+    "forced_lose": {},
     "always_win": set(),
-    "banned": {}        # uid: timestamp hết hạn cấm
+    "banned": {}
 }
 
 def is_banned(uid):
@@ -121,13 +136,17 @@ async def daily(ctx):
     now = int(time.time())
     last_daily = data[uid].get("last_daily", 0)
 
-    check_need_reset()
     if now - last_daily < 86400:
         remain = 86400 - (now - last_daily)
         return await ctx.send(f"⏳ Hãy chờ {remain//3600}h{(remain%3600)//60}m nữa!")
 
-    if not has_passed(uid):
-        return await ctx.send(f"🔗 Vượt link để nhận daily:\n{DAILY_LINK}?uid={uid}&apitoken={API_TOKEN}")
+    # Nếu chưa verify
+    if not has_verified(uid):
+        code = generate_code(uid)
+        return await ctx.send(
+            f"🔑 Code daily của bạn: **{code}**\n"
+            f"👉 Vượt link và nhập code để xác nhận:\n{DAILY_LINK}?uid={uid}&apitoken={API_TOKEN}&code={code}"
+        )
 
     reward = 1000
     add_balance(uid, reward)
@@ -142,7 +161,7 @@ async def bal(ctx):
     if is_banned(uid): return await ctx.send("🚫 Bạn đang bị cấm chơi!")
     await ctx.send(f"💰 Số dư: **{get_balance(uid):,} xu**")
 
-# --------- PENALTY GAME ---------
+# --------- GAME ---------
 @bot.command()
 async def sut(ctx, huong: str, bet: int):
     uid = str(ctx.author.id)
@@ -156,34 +175,30 @@ async def sut(ctx, huong: str, bet: int):
     if bet <= 0 or bet > balance:
         return await ctx.send("❌ Số tiền cược không hợp lệ!")
 
-    # Nếu bị admin ép luôn thắng
     if uid in state["always_win"]:
         result = "win"
     else:
-        # Check ép thua
         if state["forced_lose"].get(uid, 0) > 0:
             result = "lose"
             state["forced_lose"][uid] -= 1
         else:
-            chance = random.random()
-            result = "win" if chance < 0.35 else "lose"
+            result = "win" if random.random() < 0.35 else "lose"
 
-    # Xử lý kết quả
     if result == "win":
         add_balance(uid, bet)
         state["win_streak"][uid] = state["win_streak"].get(uid, 0) + 1
         if state["win_streak"][uid] >= 6:
             state["forced_lose"][uid] = 3
             state["win_streak"][uid] = 0
-        msg = f"⚽ Bạn sút {huong.upper()} → 🥅 Thủ môn bay ngược hướng → ✅ THẮNG! +{bet} xu"
+        msg = f"⚽ Bạn sút {huong.upper()} → ✅ THẮNG! +{bet} xu"
     else:
         set_balance(uid, balance - bet)
         state["win_streak"][uid] = 0
-        msg = f"⚽ Bạn sút {huong.upper()} → 🥅 Thủ môn bắt được → ❌ THUA! -{bet} xu"
+        msg = f"⚽ Bạn sút {huong.upper()} → ❌ THUA! -{bet} xu"
 
     await ctx.send(msg + f"\n💰 Số dư: {get_balance(uid):,} xu")
 
-# --------- PLAYER COMMANDS ---------
+# --------- PLAYER ---------
 @bot.command()
 async def chuyentien(ctx, member: discord.Member, amount: int):
     uid = str(ctx.author.id)
@@ -210,7 +225,7 @@ async def top(ctx):
 async def xemtien(ctx, member: discord.Member):
     await ctx.send(f"💰 {member.mention} có {get_balance(member.id):,} xu")
 
-# --------- ADMIN COMMANDS ---------
+# --------- ADMIN ---------
 @bot.command()
 async def themtien(ctx, member: discord.Member, amount: int):
     if ctx.author.id not in ADMIN_UID: return
@@ -255,7 +270,7 @@ async def cam(ctx, member: discord.Member, duration: str):
 async def cachchoi(ctx):
     text = (
         "**📜 Lệnh người chơi:**\n"
-        f"{PREFIX}daily → Nhận xu hàng ngày (cần vượt link)\n"
+        f"{PREFIX}daily → Nhận xu hàng ngày (cần vượt link + code)\n"
         f"{PREFIX}bal → Xem số dư\n"
         f"{PREFIX}sut <trái/phải> <tiền> → Sút penalty\n"
         f"{PREFIX}chuyentien @user <tiền> → Chuyển tiền\n"
@@ -277,10 +292,12 @@ app = Flask(__name__)
 def verify():
     uid = request.args.get("uid")
     token = request.args.get("apitoken")
-    if not uid: return "❌ Thiếu UID!"
+    code = request.args.get("code")
+    if not uid or not code: return "❌ Thiếu UID hoặc CODE!"
     if token != API_TOKEN: return "❌ Sai API token!"
-    mark_passed(uid)
-    return f"✅ UID {uid} xác nhận vượt link thành công!"
+    if verify_code(uid, code):
+        return f"✅ UID {uid} xác nhận vượt link thành công!"
+    return "❌ Code không hợp lệ!"
 
 def run_flask():
     app.run(host="0.0.0.0", port=5000)
