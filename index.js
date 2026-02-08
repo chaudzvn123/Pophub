@@ -10,76 +10,59 @@ const client = new Client({
   ]
 });
 
-// ====== TOOL ======
-function randomString(length) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+function random(len) {
+  const c = "abcdefghijklmnopqrstuvwxyz0123456789";
+  return [...Array(len)].map(() => c[Math.floor(Math.random() * c.length)]).join("");
 }
 
-function createAccount() {
-  const user = `vmos${randomString(12)}@hoang.cloud`;
-  const pass = randomString(16);
-  return `${user}|${pass}`;
+function createVMOSAccount() {
+  const tk = `vmos${random(12)}@hoang.cloud`;
+  const mk = random(16);
+  return `${tk}|${mk}`;
 }
 
-// ====== PLACEHOLDER BUY ======
-async function buyFreeMachine(token, username, password) {
-  // ❗ CHỈ LÀ MÔ PHỎNG
-  console.log("TOKEN:", token);
-  console.log("BUY WITH:", username, password);
-
-  await new Promise(r => setTimeout(r, 2000));
-  return true;
+// ❌ CHỖ DUY NHẤT BẠN TỰ GẮN API
+async function buyVmosFree6h(username, password) {
+  console.log("LOGIN:", username, password);
+  await new Promise(r => setTimeout(r, 1500));
+  return true; // mock
 }
 
-// ====== BOT ======
 client.on("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+  console.log("🤖 Bot ready");
 });
 
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
 
-  // !getvmos
+  // Tạo tài khoản
   if (msg.content === "!getvmos") {
-    const account = createAccount();
-    msg.reply(
-      `✅ **Tài khoản đã tạo:**\n\`\`\`${account}\`\`\``
-    );
+    return msg.reply(`\`\`\`${createVMOSAccount()}\`\`\``);
   }
 
-  // !buy
-  if (msg.content === "!buy") {
-    msg.reply("📥 **Nhập tài khoản theo dạng:** `tk|mk`");
+  // Mua VMOS
+  if (msg.content === "!buyvmos") {
+    await msg.reply("📥 Nhập tài khoản theo dạng: `tk|mk`");
 
-    const filter = m => m.author.id === msg.author.id;
     const collected = await msg.channel.awaitMessages({
-      filter,
+      filter: m => m.author.id === msg.author.id,
       max: 1,
       time: 30000
     });
 
-    if (!collected.size) {
-      return msg.reply("⏰ Hết thời gian nhập!");
-    }
+    if (!collected.size) return msg.reply("⏰ Hết thời gian.");
 
     const input = collected.first().content.trim();
+    if (!input.includes("|")) return msg.reply("❌ Sai định dạng `tk|mk`");
 
-    if (!input.includes("|")) {
-      return msg.reply("❌ Sai định dạng! Dùng: `tk|mk`");
-    }
+    const [tk, mk] = input.split("|");
 
-    const [username, password] = input.split("|");
-
-    msg.reply("⏳ Đang mua máy free 6h...");
-
-    const fakeToken = "YOUR_TOKEN_HERE";
-    const result = await buyFreeMachine(fakeToken, username, password);
-
-    if (result) {
-      msg.reply("✅ **Mua máy thành công (mock)**");
-    } else {
-      msg.reply("❌ **Mua máy thất bại**");
+    try {
+      await msg.reply("⏳ Đang mua máy VMOS free 6h...");
+      const ok = await buyVmosFree6h(tk, mk);
+      msg.reply(ok ? "✅ Mua máy thành công" : "❌ Mua máy thất bại");
+    } catch (e) {
+      msg.reply("⚠️ Chưa triển khai API VMOS");
     }
   }
 });
